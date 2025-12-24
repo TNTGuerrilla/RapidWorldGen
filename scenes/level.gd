@@ -52,9 +52,11 @@ var data_mutex: Mutex = Mutex.new()
 
 # --- Chunk Management ---
 var drawn_chunks: Dictionary = {} # Set of chunks currently visible on the TileMap.
-var chunks_being_generated: Dictionary = {} # Set of chunks currently being processed by the thread.
-var chunks_to_generate: Array[Vector2i] = [] # Queue of chunks waiting to be generated.
+var chunks_being_generated: Dictionary = {} # Set of chunks currently being processed by the thread pool.
 var chunks_to_draw: Array[Vector2i] = [] # Queue of chunks waiting to be drawn to the TileMap.
+
+# Used to protect chunks_being_generated when multiple threads access it.
+var generation_mutex: Mutex = Mutex.new()
 
 # Debug Visualization
 var debug_container: Node2D
@@ -66,12 +68,6 @@ var debug_sprites: Dictionary = {} # Key: chunk -> Value: Sprite2D
 # (e.g., A dirt path can connect to a stone road without a hard border).
 # Format: terrain_id -> Array of { "coords": Vector2i, "peering": Dictionary, "score": int, "prob": float }
 var tile_rules: Dictionary = {}
-
-# --- Threading ---
-var thread: Thread
-var should_exit: bool = false
-var semaphore: Semaphore = Semaphore.new()
-var thread_mutex: Mutex = Mutex.new()
 
 # Standard neighbor directions for 3x3 bitmasking (Autotiling).
 const NEIGHBORS = [
@@ -132,11 +128,6 @@ func _ready() -> void:
 	# Pre-calculate autotiling rules and setup flip alternatives.
 	_build_tile_rules()
 	_setup_tree_alternatives()
-	
-	# Start the generation thread.
-	# Threads prevent the game from freezing while calculating thousands of tiles.
-	thread = Thread.new()
-	thread.start(_thread_function)
 
 # Creates flipped versions of tree tiles if they don't exist.
 # This allows us to reuse the same tree art facing left or right.
@@ -189,12 +180,6 @@ func _build_tile_rules() -> void:
 	for terrain in tile_rules:
 		tile_rules[terrain].sort_custom(func(a, b): return a["score"] > b["score"])
 
-# Cleanup thread on exit to prevent crashes.
-func _exit_tree() -> void:
-	should_exit = true
-	semaphore.post() # Wake up the thread so it can exit.
-	thread.wait_to_finish()
-
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == KEY_TAB:
 		if debug_container:
@@ -213,17 +198,22 @@ func _process(_delta: float) -> void:
 		for y in range(current_chunk.y - generation_distance, current_chunk.y + generation_distance + 1):
 			var chunk = Vector2i(x, y)
 			
-			thread_mutex.lock()
-			if not chunks_being_generated.has(chunk) and not chunks_to_generate.has(chunk):
+			generation_mutex.lock()
+			var already_generating = chunks_being_generated.has(chunk)
+			generation_mutex.unlock()
+			
+			if not already_generating:
 				data_mutex.lock()
 				# Check if we already have data for this chunk.
 				var done = terrain_atlas_coords.has(chunk * chunk_size)
 				data_mutex.unlock()
 				
 				if not done:
-					chunks_to_generate.append(chunk)
-					semaphore.post() # Signal the thread to work.
-			thread_mutex.unlock()
+					generation_mutex.lock()
+					chunks_being_generated[chunk] = true
+					generation_mutex.unlock()
+					# Add task to the built-in WorkerThreadPool
+					WorkerThreadPool.add_task(_generate_chunk.bind(chunk))
 
 	# 2. Schedule Drawing (Visual Range)
 	var draw_radius_chunks = []
@@ -323,27 +313,6 @@ func _create_debug_texture(chunk: Vector2i) -> ImageTexture:
 			img.set_pixel(x, y, color)
 			
 	return ImageTexture.create_from_image(img)
-
-# The function running in the separate thread.
-# Consumes chunks from the queue and processes them.
-func _thread_function() -> void:
-	while true:
-		semaphore.wait() # Wait for signal (sleeps until posted)
-		if should_exit: break
-		
-		thread_mutex.lock()
-		if chunks_to_generate.is_empty():
-			thread_mutex.unlock()
-			continue
-		var chunk = chunks_to_generate.pop_front()
-		chunks_being_generated[chunk] = true
-		thread_mutex.unlock()
-		
-		_generate_chunk(chunk)
-		
-		thread_mutex.lock()
-		chunks_being_generated.erase(chunk)
-		thread_mutex.unlock()
 
 # --- The Core Generation Logic ---
 func _generate_chunk(chunk: Vector2i) -> void:
@@ -568,6 +537,11 @@ func _generate_chunk(chunk: Vector2i) -> void:
 	for pos in chunk_coords:
 		terrain_atlas_coords[pos] = chunk_coords[pos]
 	data_mutex.unlock()
+	
+	# Mark this chunk as no longer being generated
+	generation_mutex.lock()
+	chunks_being_generated.erase(chunk)
+	generation_mutex.unlock()
 
 # Helper: Selects a terrain tile from candidates based on their probability.
 func _pick_weighted(candidates: Array) -> Vector2i:
