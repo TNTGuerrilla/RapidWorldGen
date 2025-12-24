@@ -85,7 +85,8 @@ This project is released under the **MIT License**.
 
 In plain English: You are free to use, modify, and distribute this code in your own projects—commercial or otherwise. 
 
-**The "Don't Be A Dick" Clause:**
+### **The DBAD Clause:**
+
 I built this because I couldn't find a good resource that was this extensive. If you use this, please don't just slap your name on the script and sell it as your own "revolutionary proc-gen engine". That would make you a dick. Use it to learn, use it as a foundation for your dream game, and if you make something cool, a shout-out or a link back to this repo would be awesome (but not required). Just be a cool human and keep the spirit of open-source alive!
 
 
