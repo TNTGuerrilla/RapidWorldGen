@@ -310,11 +310,12 @@ func _create_debug_texture(chunk: Vector2i) -> ImageTexture:
 			var n = noise.get_noise_2d(pos.x, pos.y)
 			var color = Color.BLACK
 			
+			# Match these values with the biome layer values below 
 			if n < 0.0:
 				color = Color(0, 0, 0.8, 0.25) # Deep Blue (Water)
-			elif n < 0.1:
+			elif n < 0.15:
 				color = Color(0.8, 0.8, 0.2, 0.25) # Yellow (Sand)
-			elif n < 0.45:
+			elif n < 0.535:
 				color = Color(0.2, 0.8, 0.2, 0.25) # Green (Grass)
 			else:
 				color = Color(0.5, 0.5, 0.5, 0.25) # Grey (Cliff)
